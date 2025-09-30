@@ -38,7 +38,10 @@ bool BQ27427::begin(int sda, int scl)
 {
 	uint16_t deviceID = 0;
 	
-	Wire.begin(sda, scl); // Initialize I2C master
+	 // Initialize I2C master
+	Wire.setSDA(sda);
+	Wire.setSCL(scl);
+	Wire.begin();
 	
 	deviceID = deviceType(); // Read deviceType from BQ27427
 	
