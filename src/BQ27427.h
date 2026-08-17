@@ -102,7 +102,8 @@ public:
 	}
 
 	/**
-	    Initializes I2C and verifies communication with the BQ27427.
+	    Initializes I2C and verifies communication with the BQ27427 (or BQ27421-G1,
+		selecting its Data Memory layout; see setDeviceType).
 		Must be called before using any other functions.
 		
 		@param sda pin number for I2C data line
@@ -110,6 +111,44 @@ public:
 		@return true if communication was successful.
 	*/
 	bool begin(int sda, int scl);
+
+	/**
+	    Selects the device variant, which determines the Data Memory layout. The
+	    BQ27427 and the pin-compatible BQ27421-G1 share the command set but lay out
+	    the State subclass (82) differently (e.g. Design Capacity is at offset 6 on
+	    the 427 and offset 10 on the 421, where the 427 keeps Terminate Voltage).
+	    begin() calls this automatically from the DEVICE_TYPE it reads; call it
+	    yourself only if you skip begin(). Defaults to the BQ27427.
+
+	    @param deviceType 0x0427 or 0x0421 (as returned by deviceType())
+	    @return true if the variant is known, false (variant unchanged) otherwise
+	*/
+	bool setDeviceType(uint16_t deviceType);
+
+	/**
+	    Read Data Memory bytes in NORMAL mode: a plain block transfer with no CONFIG
+	    UPDATE round trip, so unlike readExtendedData() it neither stalls waiting on
+	    CFGUPMODE nor soft-resets the gauge on the way out (which restarts gauging
+	    from a fresh OCV). Requires UNSEALED (unseals if needed). The bytes must not
+	    cross a 32-byte block boundary.
+
+	    Callers should validate the transfer against a byte with a known value before
+	    trusting the result; see peekDataMemoryWord.
+
+	    @return true if the block transfer was set up and `len` bytes were read
+	*/
+	bool peekDataMemory(uint8_t classID, uint8_t offset, uint8_t *buf, uint8_t len);
+
+	/**
+	    16-bit MSB-first convenience wrapper over peekDataMemory(). Returns 0 on failure.
+	*/
+	uint16_t peekDataMemoryWord(uint8_t classID, uint8_t offset);
+
+	/**
+	    State subclass offset of Design Capacity for the selected device variant, for
+	    use with peekDataMemoryWord(BQ27427_ID_STATE, ...).
+	*/
+	uint8_t designCapacityOffset(void) { return _deviceVariant->designCapacityOffset; }
 	
 	/**
 	    Configures the design capacity of the connected battery.
@@ -476,6 +515,20 @@ private:
 	bool _sealFlag; // Global to identify that IC was previously sealed
 	bool _userConfigControl; // Global to identify that user has control over 
 	                         // entering/exiting config
+
+	// Per-variant Data Memory layout: State subclass (82) byte offsets, which differ
+	// between the BQ27427 (TRM SLUUCD5 Table 7-2) and BQ27421-G1 (TRM SLUUAC5).
+	struct DeviceVariant {
+		uint16_t deviceType;
+		uint8_t designCapacityOffset;
+		uint8_t designEnergyOffset;
+		uint8_t terminateVoltageOffset;
+		uint8_t taperRateOffset;
+		uint8_t sociDeltaOffset;
+	};
+	static const DeviceVariant kBQ27427Variant;
+	static const DeviceVariant kBQ27421Variant;
+	const DeviceVariant *_deviceVariant;
 	
 	/**
 	    Check if the BQ27427 is sealed or not.

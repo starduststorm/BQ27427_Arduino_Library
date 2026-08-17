@@ -29,11 +29,16 @@ See LICENSE.txt for full license terms.
  ************************** Initialization Functions *************************
  *****************************************************************************/
 // Initializes class variables
-BQ27427::BQ27427() : _deviceAddress(BQ27427_I2C_ADDRESS), _sealFlag(false), _userConfigControl(false)
+//                                                        type    dcap  denergy termV taper soci
+const BQ27427::DeviceVariant BQ27427::kBQ27427Variant = { 0x0427,  6,    8,     10,   21,   20 };
+const BQ27427::DeviceVariant BQ27427::kBQ27421Variant = { 0x0421, 10,   12,     16,   27,   26 };
+
+BQ27427::BQ27427() : _deviceAddress(BQ27427_I2C_ADDRESS), _sealFlag(false), _userConfigControl(false),
+	_deviceVariant(&kBQ27427Variant)
 {
 }
 
-// Initializes I2C and verifies communication with the BQ27427.
+// Initializes I2C and verifies communication with the BQ27427 (or BQ27421-G1).
 bool BQ27427::begin(int sda, int scl)
 {
 	uint16_t deviceID = 0;
@@ -45,57 +50,86 @@ bool BQ27427::begin(int sda, int scl)
 	
 	deviceID = deviceType(); // Read deviceType from BQ27427
 	
-	if (deviceID == BQ27427_DEVICE_ID)
+	return setDeviceType(deviceID); // true for a known variant, which also selects its Data Memory layout
+}
+
+bool BQ27427::setDeviceType(uint16_t deviceType)
+{
+	if (deviceType == kBQ27427Variant.deviceType) _deviceVariant = &kBQ27427Variant;
+	else if (deviceType == kBQ27421Variant.deviceType) _deviceVariant = &kBQ27421Variant;
+	else return false;
+	return true;
+}
+
+bool BQ27427::peekDataMemory(uint8_t classID, uint8_t offset, uint8_t *buf, uint8_t len)
+{
+	if (len == 0 || (offset % 32) + len > 32) return false;
+	if (sealed())
 	{
-		return true; // If device ID is valid, return true
+		_sealFlag = true;
+		unseal();
 	}
-	
-	return false; // Otherwise return false
+	if (!blockDataControl()) return false;
+	if (!blockDataClass(classID)) return false;
+	if (!blockDataOffset(offset / 32)) return false;
+	// Give the gauge a moment to stage the block into the command space. With gauging
+	// running (unlike CONFIG UPDATE mode) it doesn't appear to be there instantly.
+	delay(2);
+	for (uint8_t i = 0; i < len; i++)
+		buf[i] = readBlockData((offset % 32) + i);
+	return true;
+}
+
+uint16_t BQ27427::peekDataMemoryWord(uint8_t classID, uint8_t offset)
+{
+	uint8_t b[2];
+	if (!peekDataMemory(classID, offset, b, 2)) return 0;
+	return ((uint16_t)b[0] << 8) | b[1];
 }
 
 // Configures the design capacity of the connected battery.
 bool BQ27427::setCapacity(uint16_t capacity)
 {
 	// Write to STATE subclass (82) of BQ27427 extended memory.
-	// Offset 0x06 (6)
+	// Offset 6 on the BQ27427, 10 on the BQ27421-G1
 	// Design capacity is a 2-byte piece of data - MSB first
 	// Unit: mAh
 	uint8_t capMSB = capacity >> 8;
 	uint8_t capLSB = capacity & 0x00FF;
 	uint8_t capacityData[2] = {capMSB, capLSB};
-	return writeExtendedData(BQ27427_ID_STATE, 6, capacityData, 2);
+	return writeExtendedData(BQ27427_ID_STATE, _deviceVariant->designCapacityOffset, capacityData, 2);
 }
 
 // Get the design energy of the connected battery.
 uint16_t BQ27427::designEnergy(void)
 {
-	return (readExtendedData(BQ27427_ID_STATE, 8) << 8 | readExtendedData(BQ27427_ID_STATE, 9));
+	return (readExtendedData(BQ27427_ID_STATE, _deviceVariant->designEnergyOffset) << 8 | readExtendedData(BQ27427_ID_STATE, _deviceVariant->designEnergyOffset + 1));
 }
 
 // Configures the design energy of the connected battery.
 bool BQ27427::setDesignEnergy(uint16_t energy)
 {
 	// Write to STATE subclass (82) of BQ27427 extended memory.
-	// Offset 0x08 (8)
+	// Offset 8 on the BQ27427, 12 on the BQ27421-G1
 	// Design energy is a 2-byte piece of data - MSB first
 	// Unit: mWh
 	uint8_t enMSB = energy >> 8;
 	uint8_t enLSB = energy & 0x00FF;
 	uint8_t energyData[2] = {enMSB, enLSB};
-	return writeExtendedData(BQ27427_ID_STATE, 8, energyData, 2);
+	return writeExtendedData(BQ27427_ID_STATE, _deviceVariant->designEnergyOffset, energyData, 2);
 }
 
 // Get the terminate voltage of the connected battery.
 uint16_t BQ27427::terminateVoltage(void)
 {
-	return (readExtendedData(BQ27427_ID_STATE, 10) << 8 | readExtendedData(BQ27427_ID_STATE, 11));
+	return (readExtendedData(BQ27427_ID_STATE, _deviceVariant->terminateVoltageOffset) << 8 | readExtendedData(BQ27427_ID_STATE, _deviceVariant->terminateVoltageOffset + 1));
 }
 
 // Configures the terminate voltage.
 bool BQ27427::setTerminateVoltage(uint16_t voltage)
 {
 	// Write to STATE subclass (82) of BQ27427 extended memory.
-	// Offset 0x0A (10)
+	// Offset 10 on the BQ27427, 16 on the BQ27421-G1
 	// Terminate voltage is a 2-byte piece of data - MSB first
 	// Unit: mV
 	// Min 2500, Max 3700
@@ -105,7 +139,7 @@ bool BQ27427::setTerminateVoltage(uint16_t voltage)
 	uint8_t tvMSB = voltage >> 8;
 	uint8_t tvLSB = voltage & 0x00FF;
 	uint8_t tvData[2] = {tvMSB, tvLSB};
-	return writeExtendedData(BQ27427_ID_STATE, 10, tvData, 2);
+	return writeExtendedData(BQ27427_ID_STATE, _deviceVariant->terminateVoltageOffset, tvData, 2);
 }
 
 // Get the discharge current threshold.
@@ -155,14 +189,14 @@ bool BQ27427::setTaperVoltage(uint16_t voltage)
 // Get the taper rate of the connected battery.
 uint16_t BQ27427::taperRate(void)
 {
-	return (readExtendedData(BQ27427_ID_STATE, 21) << 8 | readExtendedData(BQ27427_ID_STATE, 22));
+	return (readExtendedData(BQ27427_ID_STATE, _deviceVariant->taperRateOffset) << 8 | readExtendedData(BQ27427_ID_STATE, _deviceVariant->taperRateOffset + 1));
 }
 
 // Configures taper rate of connected battery.
 bool BQ27427::setTaperRate(uint16_t rate)
 {
 	// Write to STATE subclass (82) of BQ27427 extended memory.
-	// Offset 0x15 (21)
+	// Offset 21 on the BQ27427, 27 on the BQ27421-G1
 	// Termiante voltage is a 2-byte piece of data - MSB first
 	// Unit: 0.1h
 	// Max 2000
@@ -170,7 +204,7 @@ bool BQ27427::setTaperRate(uint16_t rate)
 	uint8_t trMSB = rate >> 8;
 	uint8_t trLSB = rate & 0x00FF;
 	uint8_t trData[2] = {trMSB, trLSB};
-	return writeExtendedData(BQ27427_ID_STATE, 21, trData, 2);
+	return writeExtendedData(BQ27427_ID_STATE, _deviceVariant->taperRateOffset, trData, 2);
 }
 
 // Read the polarity of the BQ27427 current measurement.
@@ -250,7 +284,7 @@ uint16_t BQ27427::capacity(capacity_measure type)
 		capacity = readWord(BQ27427_COMMAND_FULL_CAP_UNFL);
 		break;
 	case DESIGN:
-		capacity = (readExtendedData(BQ27427_ID_STATE, 6) << 8 | readExtendedData(BQ27427_ID_STATE, 7));
+		capacity = (readExtendedData(BQ27427_ID_STATE, _deviceVariant->designCapacityOffset) << 8 | readExtendedData(BQ27427_ID_STATE, _deviceVariant->designCapacityOffset + 1));
 	}
 	
 	return capacity;
@@ -461,14 +495,14 @@ bool BQ27427::dsgFlag(void)
 // Get the SOC_INT interval delta
 uint8_t BQ27427::sociDelta(void)
 {
-	return readExtendedData(BQ27427_ID_STATE, 26);
+	return readExtendedData(BQ27427_ID_STATE, _deviceVariant->sociDeltaOffset);
 }
 
 // Set the SOC_INT interval delta to a value between 1 and 100
 bool BQ27427::setSOCIDelta(uint8_t delta)
 {
 	uint8_t soci = constrain(delta, 0, 100);
-	return writeExtendedData(BQ27427_ID_STATE, 26, &soci, 1);
+	return writeExtendedData(BQ27427_ID_STATE, _deviceVariant->sociDeltaOffset, &soci, 1);
 }
 
 // Pulse the GPOUT pin - must be in SOC_INT mode
