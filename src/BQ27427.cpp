@@ -681,7 +681,10 @@ bool BQ27427::unseal(void)
 // Read the 16-bit opConfig register from extended data
 uint16_t BQ27427::opConfig(void)
 {
-	return readExtendedData(BQ27427_ID_REGISTERS, 0);
+	// stored big-endian, like writeOpConfig() writes it; readExtendedData() returns a single byte
+	uint16_t msb = readExtendedData(BQ27427_ID_REGISTERS, 0);
+	uint16_t lsb = readExtendedData(BQ27427_ID_REGISTERS, 1);
+	return (msb << 8) | lsb;
 }
 
 // Write the 16-bit opConfig register in extended data
