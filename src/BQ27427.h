@@ -247,6 +247,17 @@ public:
 	*/
 	bool changeCurrentPolarity(void);
 
+	/**
+	    Allow or forbid the SLEEP power mode (OpConfig [SLEEP], ROM default allowed). Call between enterConfig/exitConfig.
+
+		@param enabled false keeps the gauge in NORMAL mode whenever it is powered
+		@return true on success
+	*/
+	bool setSleepEnabled(bool enabled);
+
+	/** The 16-bit OpConfig register (Registers subclass, offset 0) */
+	uint16_t operationConfig(void) { return opConfig(); }
+
 	/////////////////////////////
 	// Battery Characteristics //
 	/////////////////////////////

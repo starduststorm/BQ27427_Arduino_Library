@@ -372,6 +372,16 @@ bool BQ27427::setGPOUTPolarity(bool activeHigh)
 	return writeOpConfig(newOpConfig);	
 }
 
+// Allow or forbid the gauge's SLEEP power mode (OpConfig [SLEEP]); call in config mode
+bool BQ27427::setSleepEnabled(bool enabled)
+{
+	uint16_t oldOpConfig = opConfig();
+	uint16_t newOpConfig = enabled ? (oldOpConfig | BQ27427_OPCONFIG_SLEEP) : (oldOpConfig & ~BQ27427_OPCONFIG_SLEEP);
+	if (newOpConfig == oldOpConfig)
+		return true;
+	return writeOpConfig(newOpConfig);
+}
+
 // Get GPOUT function (BAT_LOW or SOC_INT)
 bool BQ27427::GPOUTFunction(void)
 {
